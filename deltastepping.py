@@ -1,16 +1,68 @@
 import pygraph
+from pygraph.classes.graph import graph
+from pygraph.classes.digraph import digraph
 from pygraph.algorithms.generators import generate
 from pygraph.readwrite import markup
 from time import time
 from random import seed
 import argparse
+import numpy as np
 
-ROOT_DIR = "/home/asya/university/sqi/parallel_computing_p2/task/"
+#ROOT_DIR = "/home/asya/university/sqi/parallel_computing_p2/task/"
 random_seed = int(time())
 
 d = {} # distances from source node to others
-B = {} # Bucket 
-delta = 5
+B = {} # Bucket
+delta = 0.01
+debug = False
+
+def read_graph(filename):
+    file = open(filename, "rb")
+    if not file:
+        ValueError("Can't open file")
+
+    nodes = np.frombuffer(file.read(4), np.uint32)[0]
+    arity = np.frombuffer(file.read(8), np.uint64)[0]
+    directed = np.frombuffer(file.read(1), np.bool8)[0]
+    _ = np.frombuffer(file.read(1), np.uint8)[0]
+    rowIndices = np.frombuffer(file.read(8 * (nodes + 1)), np.uint64)
+    nEdges = arity * nodes
+    endV = np.frombuffer(file.read(4 * int(nEdges)), np.uint32)
+    nRoots = np.frombuffer(file.read(4), np.uint32)[0]
+    _ = np.frombuffer(file.read(4 * nRoots), np.uint32)
+    _ = np.frombuffer(file.read(8 * int(nRoots)), np.uint64)
+    weights = np.frombuffer(file.read(8 * int(nEdges)), np.float64)
+
+    #print(f'Nodes {nodes}')
+    #print(f'arity {arity}')
+    #print(f'directed {directed}')
+    #print(f'align {align}')
+    #print(f'RowIndices {rowIndices}')
+    #print(f'endV {endV}')
+    #print(f'nEdges {nEdges}')
+    #print(f'weights {weights}')
+
+    if directed:
+        read_graph = digraph()
+    else:
+        read_graph = graph()
+
+    for i in range(nodes):
+        read_graph.add_node(i)
+
+    for i in range(nodes):
+        # print(f'I {i}')
+        for j in range(rowIndices[i], rowIndices[i+1]):
+            # print(f'Edge ({i}, {endV[j]})')
+            edge = (i, endV[j])
+            if read_graph.has_edge(edge):
+                edge_weight = read_graph.edge_weight(edge)
+                if edge_weight > weights[j]:
+                    read_graph.set_edge_weight(edge, weights[j])
+            else:
+                read_graph.add_edge(edge, wt=weights[j])
+
+    return read_graph
 
 def new_graph(nodes=10, edges=18, wt_range=(1, 5)):
     seed(random_seed)
@@ -26,7 +78,7 @@ def relax(node, x):
             NewBucket = B[float(x/delta)]
         if node in OldBucket:
             OldBucket.remove(node)
-            B[float(d[node/delta])] = OldBucket
+            B[float(d[node]/delta)] = OldBucket
         if node not in NewBucket:
             NewBucket.append(node)
             B[float(x/delta)] = NewBucket
@@ -43,8 +95,6 @@ def findrequests(graph, Bucket, Edges):
         #print(f'Neighbours: {node_neighbours}')
         for edge in Edges:
             if edge[0] == node and edge[1] in node_neighbours:
-                #print(f'From: {edge[0]}')
-                #print(d[edge[0]])
                 requests[edge[1]] = d[node] + graph.edge_weight(edge)
     return requests
 
@@ -57,44 +107,54 @@ def deltastepping(graph, args):
         else:
             HeavyEdges.append(edge)
 
-    print(f'LightEdges: {LightEdges}')
-    print(f'HeavyEdges: {HeavyEdges}')
+    if debug:
+        print(f'LightEdges: {LightEdges}')
+        print(f'HeavyEdges: {HeavyEdges}')
     for node in graph.nodes():
         d[node] = float("inf")
     
     relax(args.source, 0)
-
-    cnt = 0
     while B:
-        print(f'Cnt {cnt}')
         i = min(B.keys())
         Bucket = B[i]
-        #Deleted = []
-        #while i in B:
         Requests = findrequests(graph, Bucket, LightEdges)
-        #Deleted.append(Bucket)
         del B[i]
-        print(Requests)
+        #print(Requests)
         relaxall(Requests)
-        #relaxall(findrequests(graph, Deleted, HeavyEdges))
         relaxall(findrequests(graph, Bucket, HeavyEdges))
-        cnt+=1
     return
 
 if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser(description='Delta-stepping algorithm')
     arg_parser.add_argument('--source', type=int, default=0, help="Source vertice")
+    arg_parser.add_argument('--delta', type=float, default=5.0, help="Delta step")
+    arg_parser.add_argument('--input', type=str, default=None, help="Binary file with graph information")
+    arg_parser.add_argument('--nodes', type=int, default=10, help="Generate random graph with 'nodes' nodes")
+    arg_parser.add_argument('--edges', type=int, default=20, help="Generate random graph with 'edges' edges")
+    arg_parser.add_argument('--weight_min', type=int, default=1, help="Generate random graph with mininum edge weight 'weight_min'")
+    arg_parser.add_argument('--weight_max', type=int, default=5, help="Generate random graph with maximum edge weight 'weight_max'")
+    arg_parser.add_argument('--debug', type=bool, default=False, help="Debug mode")
+    arg_parser.add_argument('--out', type=str, default=None, help="Out file")
 
     args = arg_parser.parse_args()
-    graph = new_graph()
-    #print(graph.neighbors(0))
-    dotstr = markup.write(graph)
-    print(dotstr)
+    delta = args.delta
+    debug = args.debug
+
+    if args.input == None:
+        graph = new_graph(nodes=args.nodes, edges=args.edges, wt_range=(args.weight_min, args.weight_max))
+    else:
+        graph = read_graph(args.input)
+
+    if debug:
+        dotstr = markup.write(graph)
+        print(dotstr)
 
     deltastepping(graph, args)
 
-    print(d)
-    print(B)
-    #f = open(str(ROOT_DIR)+"test_graph.xml", "w")
-    #f.write(dotstr)
-    #f.close()
+    if args.out != None:
+        f = open(args.out, "w")
+        for key in d.keys():
+            f.write(f'{key}: {d[key]}\n')
+        f.close()
+    else:
+        print(d)
