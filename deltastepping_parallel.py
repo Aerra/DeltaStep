@@ -193,7 +193,7 @@ def relax(reqs):
         NewBucket = []
         if reqs[node] < d[node]:
             # change B
-            x = reqs[node]
+            x = int(reqs[node])
             if float(d[node]/delta) in B:
                 OldBucket = B[float(d[node]/delta)]
             if float(x/delta) in B:
@@ -202,9 +202,9 @@ def relax(reqs):
                 OldBucket.remove(node)
                 B[float(d[node]/delta)] = OldBucket
             if node not in NewBucket:
-                NewBucket.append(node)
+                NewBucket.append(int(node))
                 B[float(x/delta)] = NewBucket
-            d[node] = reqs[node]
+            d[int(node)] = reqs[int(node)]
 
     return
 
