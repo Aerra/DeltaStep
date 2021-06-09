@@ -1,7 +1,6 @@
 from mpi4py import MPI
 import argparse
 import numpy as np
-#from pygraph.classes.graph import graph
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
@@ -12,7 +11,7 @@ delta = 0.01
 d = {}
 B = {}
 
-print(f'Rank: {rank}, nproc: {nproc}')
+#print(f'Rank: {rank}, nproc: {nproc}')
 
 def read_graph(filename):
     if rank == 0:
@@ -35,12 +34,10 @@ def read_graph(filename):
     
         nodesonproc = nodes // (nproc - 1)
         nodesprocLast = nodesonproc + nodes % (nproc - 1)
-        #rowIndicesonproc = (nodes + 1) // (nproc - 1)
         rowIndicesonproc = nodes // (nproc - 1)
         rowIndicesoffset = 0
         nodesoffset = 0
         for i in range(1, nproc):
-            #print(f'i = {i}')
             comm.send(nodes, i)
             comm.send(nEdges, i)
             if i != nproc - 1:
@@ -127,41 +124,6 @@ def prepare_graph(graph):
 
     return graph
 
-def update_graph_info(graph):
-    graph["g2lnodes"] = {}
-    graph["l2gnodes"] = []
-    graph["g2lrowindices"] = {}
-    #graph["l2gendV"] = []
-    #graph["g2lendV"] = []
-
-    #if rank == 3:
-    #    print(f'{rank}: graph: {graph}')
-
-    for i in range(graph["nodesLocal"]):
-        globalnode = i + graph["nodesOffset"]
-        graph["g2lnodes"][int(globalnode)] = i
-        graph["l2gnodes"].append(globalnode)
-        #if rank == 3:
-        #    print(f'{rank}: {i}, {graph["rowIndicesLocal"]}')
-        for j in range(graph["rowIndicesLocal"][i], graph["rowIndicesLocal"][i+1]):
-            graph["g2rowindices"][graph["rowIndicesLocal"][j]] = j - graph["rowIndicesLocal"][0]
-
-
-            #endvlocalidx = j - graph["rowIndicesLocal"][0]
-            #endVGlobalValue = graph["endVLocal"][int(endvlocalidx)]
-            #if endVGlobalValue not in graph["g2lnodes"]:
-            #    graph["g2lnodes"][endVGlobalValue] = graph["nodesLocal"] + len(graph["l2gendV"])
-            #    #graph["l2gnodes"][graph["nodesLocal"] + len(graph["l2gendV"])] = endVGlobalValue
-            #    graph["g2lendV"][endVGlobalValue] = len(graph["l2gendV"])
-            #    graph["l2gendV"].append(endVGlobalValue)
-
-            #endVLocalValue = graph["endVLocal"][int(endvlocalidx)] - graph["nodesOffset"]
-            #if endVLocalValue < 0 or endVLocalValue >= graph["nodesOffset"]:
-            #    endVLocalValue = -1
-            #graph["g2lendV"].append(int(endVLocalValue))
-
-    return graph
-
 def exchange():
     # first sync
     if rank == 0:
@@ -187,11 +149,9 @@ def exchange():
     # second sync
     if rank == 0:
         for i in range(1, nproc):
-            comm.send(i, dest=i, tag= 4)
+            comm.send(i, dest=i, tag = 4)
     else:
-        comm.recv(source=0, tag= 4)
-    
-    #print(f'RANK: {rank}, B_from_proc: {B_from_proc}')
+        comm.recv(source=0, tag = 4)
 
     if rank == 0:
         for i in range(1, nproc):
@@ -204,7 +164,6 @@ def exchange():
                         if key not in B:
                             B[key] = B_from_proc[i][key]
                         else:
-                            #print(f'{rank}: {B_from_proc[i][key]}')
                             for val in B_from_proc[i][key]:
                                 if val not in B[key]:
                                     B[key].append(val)
@@ -226,7 +185,6 @@ def exchange():
         if rank == 1:
             comm.send(existB, dest=0, tag = 9)
 
-    #print(f'Rank: {rank} Finish exchange, {existB}')
     return existB
 
 def relax(reqs):
@@ -263,18 +221,10 @@ def findrequests(graph, bucket):
     return reqs
 
 def deltastepping(graph):
-    #if rank == 0:
-    #    exchange()
-    
     if rank != 0:
         for i in range(len(graph["ginfo"].keys())):
             d[i] = float("inf")
 
-    #LocalSource = source - graph["nodesOffset"]
-    #if LocalSource not in graph["g2lnodes"]:
-#    if source not in graph["ginfo"]:
-#        exchange()
-#    else:
     if rank != 0:
         if source in graph["ginfo"]:
             d[source] = 0
@@ -283,7 +233,6 @@ def deltastepping(graph):
     cycle = 0
     existB = True
     while existB:
-        #print(f'{rank}: cycle {cycle}')
         if B:
             i = min(B.keys())
             reqs = findrequests(graph, B[i])
@@ -326,28 +275,14 @@ if __name__ == "__main__":
 
     graph = read_graph(args.input)
 
-    ## sync
-    #if rank == 0:
-    #    for i in range(1, nproc):
-    #        comm.send(0, i, tag = 10)
-    #else:
-    #    comm.recv(source=0, tag = 10)
-    
     if rank != 0:
         graph = prepare_graph(graph)
-        #graph = update_graph_info(graph)
         comm.send(rank, dest=0, tag = 11)
     else:
         for i in range(1, nproc):
             comm.recv(source=i, tag = 11)
 
-
     graph = deltastepping(graph)
 
     # sync
     write_to_out(args.out)
-    #exchange()
-
-    #print(f'End Rank {rank}')
-    #if rank == 1:
-        #print(f'End Rank {rank}, graph: {graph}')
