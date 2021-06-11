@@ -124,6 +124,26 @@ def prepare_graph(graph):
 
     return graph
 
+def node2proc(node):
+    all = graph["nodesAll"]
+    count_on_proc = all // (nproc - 1)
+
+    i_proc = node // count_on_proc
+
+    return i_proc + 1
+
+def bucketdict2proc(B, i):
+    B_to_i = {}
+
+    for key in B.keys():
+        for node in B[key]:
+            if node2proc(node) == i:
+                if key not in B_to_i:
+                    B_to_i[key] = [ node ]
+                else:
+                    B_to_i[key].append(node)
+    return B_to_i
+
 def exchange():
     # first sync
     if rank == 0:
@@ -138,7 +158,8 @@ def exchange():
     if rank != 0:
         for i in range(1, nproc):
             if i != rank:
-                comm.isend(B, dest=i, tag = 2)
+                B_to_i = bucketdict2proc(B, i)
+                comm.isend(B_to_i, dest=i, tag = 2)
                 comm.isend(d, dest=i, tag = 20)
     
         for i in range(1, nproc):
@@ -146,12 +167,12 @@ def exchange():
                 B_from_proc[i] = comm.recv(source=i, tag = 2)
                 d_from_proc[i] = comm.recv(source=i, tag = 20)
 
-    # second sync
-    if rank == 0:
-        for i in range(1, nproc):
-            comm.send(i, dest=i, tag = 4)
-    else:
-        comm.recv(source=0, tag = 4)
+    ## second sync
+    #if rank == 0:
+    #    for i in range(1, nproc):
+    #        comm.send(i, dest=i, tag = 4)
+    #else:
+    #    comm.recv(source=0, tag = 4)
 
     if rank == 0:
         for i in range(1, nproc):
@@ -249,6 +270,8 @@ def write_to_out(filename):
             comm.send((f'sync1 {i}'), dest=i, tag = 80)
     else:
         comm.recv(source=0, tag = 80)
+
+    #print(f'{rank}: {d}')
 
     if rank == 1:
         if filename != None:
