@@ -7,6 +7,7 @@ from time import time
 from random import seed
 import argparse
 import numpy as np
+import json
 
 #ROOT_DIR = "/home/asya/university/sqi/parallel_computing_p2/task/"
 random_seed = int(time())
@@ -149,12 +150,16 @@ if __name__ == "__main__":
         dotstr = markup.write(graph)
         print(dotstr)
 
+    start_time = time()
     deltastepping(graph, args)
+    ts_duration = time() - start_time
+    print(f'Time: {ts_duration}')
 
     if args.out != None:
         f = open(args.out, "w")
-        for key in d.keys():
-            f.write(f'{key}: {d[key]}\n')
+        json.dump(d, f)
+        #for key in d.keys():
+        #    f.write(f'{key}: {d[key]}\n')
         f.close()
     else:
         print(d)

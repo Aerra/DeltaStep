@@ -1,6 +1,7 @@
 from mpi4py import MPI
 import argparse
 import numpy as np
+import json
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
@@ -144,6 +145,15 @@ def bucketdict2proc(B, i):
                     B_to_i[key].append(node)
     return B_to_i
 
+def d2proc(d, i):
+    d_to_i = {}
+
+    for key in d.keys():
+        if node2proc(key) == i and d[key] != float("inf"):
+            d_to_i[int(key)] = d[key]
+
+    return d_to_i
+
 def exchange():
     # first sync
     if rank == 0:
@@ -159,13 +169,17 @@ def exchange():
         for i in range(1, nproc):
             if i != rank:
                 B_to_i = bucketdict2proc(B, i)
-                comm.isend(B_to_i, dest=i, tag = 2)
-                comm.isend(d, dest=i, tag = 20)
+                d_to_i = d2proc(d, i)
+                #print(f'{i}: d_to_i: {len(d_to_i.keys())}')
+                #print(f'{i}: B_to_i: {len(B_to_i.keys())}')
+                comm.isend(B_to_i, dest=i, tag = (2+i))
+                comm.isend(d_to_i, dest=i, tag = (20+i))
+                #comm.isend(d, dest=i, tag = 20)
     
         for i in range(1, nproc):
             if i != rank:
-                B_from_proc[i] = comm.recv(source=i, tag = 2)
-                d_from_proc[i] = comm.recv(source=i, tag = 20)
+                B_from_proc[i] = comm.recv(source=i, tag = (2+rank))
+                d_from_proc[i] = comm.recv(source=i, tag = (20+rank))
 
     ## second sync
     #if rank == 0:
@@ -196,15 +210,26 @@ def exchange():
                             d[node] = d_from_proc[i][node]
         comm.recv(source=0, tag = 8)
 
+    # sync B existance
     existB = False
-    if B:
-        existB = True
+    if rank != 0:
+        if B:
+            existB = True
+        for i in range(1, nproc):
+            if i != rank:
+                comm.isend(existB, dest=i, tag = 9)
+
+        for i in range(1, nproc):
+            if i != rank:
+                existB_i = comm.recv(source=i, tag = 9)
+                if existB_i != existB:
+                    existB = True
 
     if rank == 0:
-        existB = comm.recv(source=1, tag = 9)
+        existB = comm.recv(source=1, tag = 10)
     else:
         if rank == 1:
-            comm.send(existB, dest=0, tag = 9)
+            comm.send(existB, dest=0, tag = 10)
 
     return existB
 
@@ -212,6 +237,10 @@ def relax(reqs):
     for node in reqs:
         OldBucket = []
         NewBucket = []
+        #print(f'{rank}: reqs: {reqs[node]}')
+        #print(f'{rank}: d: {d[node]}')
+        if node not in d:
+            d[int(node)] = float("inf")
         if reqs[node] < d[node]:
             # change B
             x = int(reqs[node])
@@ -244,11 +273,11 @@ def findrequests(graph, bucket):
 def deltastepping(graph):
     if rank != 0:
         for i in range(len(graph["ginfo"].keys())):
-            d[i] = float("inf")
+            d[int(i)] = float("inf")
 
     if rank != 0:
         if source in graph["ginfo"]:
-            d[source] = 0
+            d[int(source)] = 0
             B[0.0] = [ source ]
 
     cycle = 0
@@ -265,6 +294,7 @@ def deltastepping(graph):
     return graph
 
 def write_to_out(filename):
+    # TODO Maybe i do not need this sync
     if rank == 0:
         for i in range(1, nproc):
             comm.send((f'sync1 {i}'), dest=i, tag = 80)
@@ -273,14 +303,31 @@ def write_to_out(filename):
 
     #print(f'{rank}: {d}')
 
-    if rank == 1:
+    if rank == 0:
+        d_from_i = {}
+        for i in range(1, nproc):
+            d_from_i[i] = comm.recv(source=i, tag=81)
+
+        d_total = {}
+        for i in range(1, nproc):
+            for key in d_from_i[i].keys():
+                if key not in d_total:
+                    #print(d_from_i[i][key])
+                    d_total[key] = d_from_i[i][key]
+                else:
+                    if d_from_i[i][key] < d_total[key]:
+                        d_total[key] = d_from_i[i][key]
         if filename != None:
             f = open(filename, "w")
-            for key in d.keys():
-                f.write(f'{key}: {d[key]}\n')
+            json.dump(d_total, f)
+            #for key in d.keys():
+            #    f.write(f'{key}: {d_total[key]}\n')
             f.close()
         else:
-            print(d)
+            print(d_total)
+    else:
+        comm.send(d, dest=0, tag=81)
+
     return
 
 if __name__ == "__main__":
@@ -305,7 +352,11 @@ if __name__ == "__main__":
         for i in range(1, nproc):
             comm.recv(source=i, tag = 11)
 
+    start_time = MPI.Wtime()
     graph = deltastepping(graph)
+    ts_duration = MPI.Wtime() - start_time
+    if rank == 0:
+        print(f'ts: {ts_duration}')
 
     # sync
     write_to_out(args.out)
