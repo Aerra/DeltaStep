@@ -170,23 +170,34 @@ def exchange():
             if i != rank:
                 B_to_i = bucketdict2proc(B, i)
                 d_to_i = d2proc(d, i)
-                #print(f'{i}: d_to_i: {len(d_to_i.keys())}')
-                #print(f'{i}: B_to_i: {len(B_to_i.keys())}')
                 comm.isend(B_to_i, dest=i, tag = (2+i))
-                comm.isend(d_to_i, dest=i, tag = (20+i))
+                # more isend because buffer has limited size
+                d_to_i_len = 0
+                if len(d_to_i) > 0:
+                    d_to_i_len = len(d_to_i) // 100 + 1
+                comm.isend(d_to_i_len, dest=i, tag=(200+i))
+                copy = {}
+                counter = 1
+                for keys in d_to_i.keys():
+                    copy[keys] = d_to_i[keys]
+                    if len(copy) >= 100 and counter != d_to_i_len:
+                        comm.isend(copy, dest=i, tag = (20*i+counter))
+                        copy = {}
+                        counter += 1
+                    else:
+                        if counter == d_to_i_len and len(copy.keys()) >= (d_to_i_len % 100):
+                            comm.isend(copy, dest=i, tag = (20*i+counter))
                 #comm.isend(d, dest=i, tag = 20)
     
         for i in range(1, nproc):
             if i != rank:
                 B_from_proc[i] = comm.recv(source=i, tag = (2+rank))
-                d_from_proc[i] = comm.recv(source=i, tag = (20+rank))
-
-    ## second sync
-    #if rank == 0:
-    #    for i in range(1, nproc):
-    #        comm.send(i, dest=i, tag = 4)
-    #else:
-    #    comm.recv(source=0, tag = 4)
+                d_to_i_len = comm.recv(source=i, tag = (200 + rank))
+                d_from_proc[i] = {}
+                for c in range(d_to_i_len):
+                    get = {}
+                    get[i] = comm.recv(source=i, tag = (20*rank + c + 1))
+                    d_from_proc.update(get)
 
     if rank == 0:
         for i in range(1, nproc):
@@ -301,8 +312,6 @@ def write_to_out(filename):
     else:
         comm.recv(source=0, tag = 80)
 
-    #print(f'{rank}: {d}')
-
     if rank == 0:
         d_from_i = {}
         for i in range(1, nproc):
@@ -312,7 +321,6 @@ def write_to_out(filename):
         for i in range(1, nproc):
             for key in d_from_i[i].keys():
                 if key not in d_total:
-                    #print(d_from_i[i][key])
                     d_total[key] = d_from_i[i][key]
                 else:
                     if d_from_i[i][key] < d_total[key]:
@@ -320,8 +328,6 @@ def write_to_out(filename):
         if filename != None:
             f = open(filename, "w")
             json.dump(d_total, f)
-            #for key in d.keys():
-            #    f.write(f'{key}: {d_total[key]}\n')
             f.close()
         else:
             print(d_total)
