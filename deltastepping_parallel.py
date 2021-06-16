@@ -109,19 +109,19 @@ def prepare_graph(graph):
             localendVidx = j - graph["rowIndicesLocal"][0]
             endVnode = graph["endVLocal"][int(localendVidx)]
             edgeweight = graph["weightsLocal"][int(localendVidx)]
-            graph["ginfo"][globalnode]["nodes"].append(endVnode)
+            graph["ginfo"][globalnode]["nodes"].append(int(endVnode))
             graph["ginfo"][globalnode]["weights"].append(edgeweight)
             if endVnode not in graph["ginfo"]:
                 if (endVnode - graph["nodesOffset"] < 0) or (endVnode - graph["nodesOffset"] >= graph["nodesLocal"]):
-                    graph["ginfo"][endVnode] = {
+                    graph["ginfo"][int(endVnode)] = {
                         "nodes": [ globalnode ],
                         "weights": [ edgeweight ]
                     }
             else:
                 if endVnode not in graph["g2lnodes"]:
                     if (endVnode - graph["nodesOffset"] < 0) or (endVnode - graph["nodesOffset"] >= graph["nodesLocal"]):
-                        graph["ginfo"][endVnode]["nodes"].append(globalnode)
-                        graph["ginfo"][endVnode]["weights"].append(edgeweight)
+                        graph["ginfo"][int(endVnode)]["nodes"].append(globalnode)
+                        graph["ginfo"][int(endVnode)]["weights"].append(edgeweight)
 
     return graph
 
@@ -133,16 +133,16 @@ def node2proc(node):
 
     return i_proc + 1
 
-def bucketdict2proc(B, i):
+def bucketdict2proc(B_source, i):
     B_to_i = {}
 
-    for key in B.keys():
-        for node in B[key]:
+    for k in B_source.keys():
+        for node in (B_source[k]):
             if node2proc(node) == i:
-                if key not in B_to_i:
-                    B_to_i[key] = [ node ]
+                if k not in B_to_i:
+                    B_to_i[k] = [ node ]
                 else:
-                    B_to_i[key].append(node)
+                    B_to_i[k].append(node)
     return B_to_i
 
 def d2proc(d, i):
@@ -169,8 +169,44 @@ def exchange():
         for i in range(1, nproc):
             if i != rank:
                 B_to_i = bucketdict2proc(B, i)
+                b_to_i_len = 0
+                if len(B_to_i) > 0:
+                    b_to_i_len = len(B_to_i) // 10
+                if len(B_to_i) % 10 != 0:
+                    b_to_i_len += 1
+                comm.isend(b_to_i_len, dest=i, tag=(1+i))
+                copy_B = {}
+                counter_B = 1
+                for keys in B_to_i.keys():
+                    copy_B[keys] = B_to_i[keys]
+                    if len(copy_B) == 10:
+                        comm.isend(copy_B, dest=i, tag = (3*i+counter_B))
+                        copy_B = {}
+                        counter_B += 1
+                    else:
+                        if counter_B == b_to_i_len and len(copy_B.keys()) == (len(B_to_i) % 10):
+                            comm.isend(copy_B, dest=i, tag = (3*i+counter_B))
+                #comm.isend(B_to_i, dest=i, tag = (100+i))
+        for i in range(1, nproc):
+            if i != rank:
+                b_to_i_len = comm.recv(source=i, tag = (1 + rank))
+                B_from_proc[i] = {}
+                for c1 in range(b_to_i_len):
+                    get_b = {}
+                    get_b[i] = comm.recv(source=i, tag = (3*rank + c1 + 1))
+                    B_from_proc.update(get_b)
+                #B_from_proc[i] = comm.recv(source=i, tag = (100 + rank))
+
+    if rank == 0:
+        for i in range(1, nproc):
+            comm.send((f'sync2 {i}'), dest=i, tag = 50)
+    else:
+        comm.recv(source=0, tag = 50)
+
+    if rank != 0:
+        for i in range(1, nproc):
+            if i != rank:
                 d_to_i = d2proc(d, i)
-                comm.isend(B_to_i, dest=i, tag = (2+i))
                 # more isend because buffer has limited size
                 d_to_i_len = 0
                 if len(d_to_i) > 0:
@@ -180,23 +216,22 @@ def exchange():
                 counter = 1
                 for keys in d_to_i.keys():
                     copy[keys] = d_to_i[keys]
-                    if len(copy) >= 100 and counter != d_to_i_len:
-                        comm.isend(copy, dest=i, tag = (20*i+counter))
+                    if len(copy) == 100:
+                        comm.isend(copy, dest=i, tag = (300*i+counter))
                         copy = {}
                         counter += 1
                     else:
-                        if counter == d_to_i_len and len(copy.keys()) >= (d_to_i_len % 100):
-                            comm.isend(copy, dest=i, tag = (20*i+counter))
+                        if counter == d_to_i_len and len(copy.keys()) >= (len(d_to_i) % 100):
+                            comm.isend(copy, dest=i, tag = (300*i+counter))
                 #comm.isend(d, dest=i, tag = 20)
     
         for i in range(1, nproc):
             if i != rank:
-                B_from_proc[i] = comm.recv(source=i, tag = (2+rank))
                 d_to_i_len = comm.recv(source=i, tag = (200 + rank))
                 d_from_proc[i] = {}
                 for c in range(d_to_i_len):
                     get = {}
-                    get[i] = comm.recv(source=i, tag = (20*rank + c + 1))
+                    get[i] = comm.recv(source=i, tag = (300*rank + c + 1))
                     d_from_proc.update(get)
 
     if rank == 0:
@@ -255,16 +290,18 @@ def relax(reqs):
         if reqs[node] < d[node]:
             # change B
             x = int(reqs[node])
-            if float(d[node]/delta) in B:
-                OldBucket = B[float(d[node]/delta)]
-            if float(x/delta) in B:
-                NewBucket = B[float(x/delta)]
+            b_1 = round(float(d[node]/delta), 5)
+            b_2 = round(float(x/delta), 5)
+            if b_1 in B:
+                OldBucket = B[b_1]
+            if b_2 in B:
+                NewBucket = B[b_2]
             if node in OldBucket:
-                OldBucket.remove(node)
-                B[float(d[node]/delta)] = OldBucket
+                OldBucket.remove(int(node))
+                B[b_1] = OldBucket
             if node not in NewBucket:
                 NewBucket.append(int(node))
-                B[float(x/delta)] = NewBucket
+                B[b_2] = NewBucket
             d[int(node)] = reqs[int(node)]
 
     return
@@ -363,6 +400,11 @@ if __name__ == "__main__":
     ts_duration = MPI.Wtime() - start_time
     if rank == 0:
         print(f'ts: {ts_duration}')
+
+    if rank == 0:
+        f = open('/home/asya/university/sqi/parallel_computing_p2/task/DeltaStep/time_results.txt', "a")
+        f.write(f'{nproc}: {args.input} {ts_duration}\n')
+        f.close()
 
     # sync
     write_to_out(args.out)
